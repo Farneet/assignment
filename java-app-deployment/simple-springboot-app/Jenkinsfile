@@ -1,0 +1,112 @@
+pipeline {
+    agent any
+    environment {
+        K8S_SERVICE_NAME = "simple-springboot-app"
+        K8S_NAMESPACE = "backend"
+        APP_DOCKER_IMAGE_NAME = "farneet/simple-springboot-app"
+        VERSION = readMavenPom().getVersion()
+    }
+    options {
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '5'))
+    }
+    stages {
+        stage('Java - Compile & Package') {
+            /* Run for all branches but release tag. */
+            steps {
+                withMaven(globalMavenSettingsConfig: 'maven-global-settings') {
+                    script { notifyBitbucket() }
+                    sh 'mvn clean package'
+                    archiveArtifacts artifacts: '**/target/*.jar', fingerprint: true
+                }
+            }
+            post {
+                failure {
+                    sendSlack("#backend_ci","#CA2933","*FAILURE*\nJob: ${env.JOB_NAME} (#${env.BUILD_NUMBER})\nAuthor: ${env.GIT_AUTHOR}\nGit Message: ${env.GIT_MESSAGE}\nStage: ${env.STAGE_NAME}\nMore info at ${env.RUN_DISPLAY_URL}" )
+                }
+                always {
+                    script {
+                        currentBuild.result = currentBuild.result ?: 'SUCCESS'
+                        notifyBitbucket()
+                    }
+                }
+            }
+        }
+        /* Create Docker image from master branch to be used for development. Uses git hash as Docker image tag. */
+        stage('Docker - Build - Push') {
+            when { 
+                    branch 'master'
+            } 
+            options { skipDefaultCheckout() }
+            steps {
+                
+                    withDockerRegistry([credentialsId: "${env.SVC_ACCOUNT_USERNAME}", url: "${env.DOCKER_REGISTRY_URL}"]) {
+                        sh """
+                                docker build --build-arg VERSION=${env.VERSION} -t ${env.K8S_SERVICE_NAME} .
+                                docker tag ${env.K8S_SERVICE_NAME} ${env.APP_DOCKER_IMAGE_NAME}:latest
+                                docker push ${env.APP_DOCKER_IMAGE_NAME}:latest
+                            """
+                        }
+            }
+            post {
+                failure {
+                    sendSlack("#backend_ci","#CA2933","*FAILURE*\nJob: ${env.JOB_NAME} (#${env.BUILD_NUMBER})\nAuthor: ${env.GIT_AUTHOR}\nGit Message: ${env.GIT_MESSAGE}\nStage: ${env.STAGE_NAME}\nMore info at ${env.RUN_DISPLAY_URL}" )
+                }
+            }
+        }
+
+        // skip stages compile package docker build . Image is public and directly pulled from docker registry in deployment
+        /* Deploy Docker image to Production Kubernetes cluster */
+        stage('Deploy - Production') {
+            when {
+                beforeInput true
+            }
+            input {
+                message "Should we deploy to Production?"
+                ok "Yes, we should."
+            }
+            options {
+                skipDefaultCheckout()
+                retry(3)
+                timeout(time: 15, unit: 'MINUTES')
+            }
+            steps {
+                /* Uses Kubeconfig craeted when generating cluster with terraform*/
+                configFileProvider([configFile(fileId: 'kubeconfig-prod', variable: 'KUBECONFIG')]) {
+                    
+                        script{    
+                            /* Prints current state in the cluster */
+                            sh "kubectl get pods -n ${env.K8S_NAMESPACE}"
+                            sh "kubectl get ${env.K8S_SERVICE_NAME} -o yaml  --ignore-not-found=true -n ${env.K8S_NAMESPACE}"
+                            
+                            sh "helm template ${env.K8S_SERVICE_NAME}  -x deployment.yaml -x templates/service.yaml -x templates/serviceaccount.yaml -x templates/hpa.yaml -f ${env.K8S_SERVICE_NAME}/values.yaml > production_deploy.yaml"
+
+                            sh "cat production_deploy.yml"
+                            
+                            sendSlack("#deployments" ,"#808080" , "*${env.K8S_NAME}: DEPLOYING TO PRODUCTION*")
+                            sh "kubectl apply -f production_deploy.yml --force -n ${env.K8S_NAMESPACE}"
+                            sh "kubectl rollout status deployment/${env.K8S_NAME} -n ${env.K8S_NAMESPACE}"       
+                    }
+                }
+            }
+            post {
+                failure {
+                    sendSlack("#backend_ci","#CA2933","*FAILURE*\nJob: ${env.JOB_NAME} (#${env.BUILD_NUMBER})\nAuthor: ${env.GIT_AUTHOR}\nGit Message: ${env.GIT_MESSAGE}\nStage: ${env.STAGE_NAME}\nMore info at ${env.RUN_DISPLAY_URL}" )
+                }
+                success {
+                    sendSlack("#backend_ci","#53933A","*SUCCESS*\nJob: ${env.JOB_NAME} (#${env.BUILD_NUMBER})\nAuthor: ${env.GIT_AUTHOR}\nGit Message: ${env.GIT_MESSAGE}\nStage: ${env.STAGE_NAME}\nMore info at ${env.RUN_DISPLAY_URL}" )
+                    sendSlack("#deployments","#53933A","*${env.K8S_NAME}: DEPLOYMENT DONE TO PRODUCTION*")
+                }
+            }
+        }
+    }
+    post {
+        failure {
+            sendSlack("#backend_ci","#CA2933","*FAILURE*\nJob: ${env.JOB_NAME} (#${env.BUILD_NUMBER})\nAuthor: ${env.GIT_AUTHOR}\nGit Message: ${env.GIT_MESSAGE}\nStage: ${env.STAGE_NAME}\nMore info at ${env.RUN_DISPLAY_URL}" )
+            }
+        always { cleanWs() }
+    }
+}
+
+
+

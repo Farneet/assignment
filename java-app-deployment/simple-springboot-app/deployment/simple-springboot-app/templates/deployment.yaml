@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "simple-springboot-app.fullname" . }}
+  labels:
+    {{- include "simple-springboot-app.labels" . | nindent 4 }}
+spec:
+{{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+{{- end }}
+  selector:
+    matchLabels:
+      {{- include "simple-springboot-app.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        prometheus.io/scrape: "{{ .Values.prometheus.scrape }}"
+        prometheus.io/port: "{{ .Values.prometheus.port }}"
+      labels:
+        {{- include "simple-springboot-app.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "simple-springboot-app.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: JAVA_OPTS
+              value: {{ .Values.javaOpts }}
+            - name: LOG_LEVEL
+              value: {{ .Values.logLevel }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /confProperty
+              port: {{ .Values.service.port }}
+            initialDelaySeconds: {{ .Values.livenessProbeInitialDelaySeconds }}
+            periodSeconds: {{ .Values.livenessProbePeriodSeconds}}
+          readinessProbe:
+            httpGet:
+              path: /confProperty
+              port: {{ .Values.service.port }}
+            initialDelaySeconds: {{ .Values.readinessProbeInitialDelaySeconds }}
+            periodSeconds: {{ .Values.readinessProbePeriodSeconds }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

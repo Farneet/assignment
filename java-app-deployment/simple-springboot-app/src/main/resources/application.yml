@@ -1,0 +1,52 @@
+server:
+  port: 8080
+spring:
+  application:
+    name: student-rest-service
+  profiles:
+    include:
+    - complex
+
+configuration:
+  property:
+    value: Hello from Property file
+    
+###########################################
+# Management
+###########################################
+management:
+  # To change which endpoints are exposed, use
+  # management.endpoints.web.exposure.include and
+  # management.endpoints.web.exposure.exclude properties.
+  # Note: PLURAL - endpoints
+  endpoints:
+    web:
+      # Move all actuator endpoints to root path (Spring Boot 2.x. defaults to /actuator)
+      base-path: /
+      exposure:
+        # Actuator endpoints to expose: e.g.: info,health,metrics,prometheus ...
+        include: info, health, metrics, prometheus, loggers
+  # Note: SINGULAR - endpoint
+  endpoint:
+    health:
+      # When to show full health details, like disk space, db healt, etc.
+      # By default simple 'status: UP' is displayed.
+      show-details: always
+  health:
+    diskspace:
+      enabled: false
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+        http.client.requests: true
+      percentiles:
+        http.server.requests: 0.5, 0.75, 0.95, 0.98, 0.99, 0.999, 1
+        http.client.requests: 0.5, 0.75, 0.95, 0.98, 0.99, 0.999, 1
+    tags:
+      application: ${spring.application.name}
+    enable:
+      root: true
+  security:
+    enabled: false
+
